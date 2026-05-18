@@ -116,3 +116,44 @@ async function run() {
             res.send(result);
         });
 
+
+        // issue get api
+        app.get('/issues', async (req, res) => {
+            const page = parseInt(req.query.page) || 1;
+            const limit = parseInt(req.query.limit) || 9;
+            const skip = (page - 1) * limit;
+            const { search = '', status, priority, category, submittedBy } = req.query;
+            const query = {};
+            if (search) {
+                query.$or = [
+                    { title: { $regex: search, $options: 'i' } },
+                    { category: { $regex: search, $options: 'i' } },
+                    { location: { $regex: search, $options: 'i' } }
+                ];
+            }
+            if (status) query.status = status;
+            if (priority) query.isBoosted = priority.toLowerCase() === 'high';
+            if (category) query.category = { $regex: category, $options: 'i' };
+            if (submittedBy) query.submittedBy = submittedBy;
+            const total = await issuesCollection.countDocuments(query);
+            const totalPages = Math.ceil(total / limit);
+            const issues = await issuesCollection
+                .find(query)
+                .sort({ isBoosted: -1, priority: -1, upvotes: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .toArray();
+            res.send({ issues, totalPages, total });
+        });
+
+
+        // Recently Resolved Api
+        app.get('/recent-resolved-issues', async (req, res) =>{
+            const cursor = issuesCollection
+                .find({ status: "resolved" })
+                .sort({ createdAt: -1 })
+                .limit(6);
+            const result = await cursor.toArray();
+            res.send(result);
+        });
+
