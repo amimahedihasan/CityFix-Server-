@@ -184,23 +184,3 @@ async function run() {
             res.send({ updated: true, liked: !hasLiked });
         });
 
-
-        // Get single issue by ID
-        app.get('/issues/:id', async (req, res) => {
-            const id = req.params.id;
-            const issue = await issuesCollection.findOne({ _id: new ObjectId(id) });
-            res.send(issue);
-        });
-
-
-        // POST: Save User
-        app.post("/users", async (req, res) => {
-            const user = req.body;
-            const existing = await usersCollection.findOne({ email: user.email });
-            if (existing) {
-                return res.send({ message: "User already exists" });
-            }
-            const result = await usersCollection.insertOne(user);
-            res.send(result);
-        });
-
