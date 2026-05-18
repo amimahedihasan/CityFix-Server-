@@ -278,3 +278,158 @@ async function run() {
             res.send(result);
         });
 
+
+        // DELETE: Delete Issue
+        app.delete('/issues/:id', verifyFBToken, verifyNotBlocked, async (req, res) => {
+            const id = req.params.id;
+            const email = req.decoded_email;
+            const issue = await issuesCollection.findOne({ _id: new ObjectId(id) });
+            if (!issue) {
+                return res.status(404).send({ message: 'Issue not found' });
+            }
+            if (issue.submittedBy !== email) {
+                return res.status(403).send({ message: 'Forbidden access' });
+            }
+            const result = await issuesCollection.deleteOne({ _id: new ObjectId(id) });
+            res.send(result);
+        });
+
+
+        // New
+        app.patch('/issues/:id/assign-staff', verifyFBToken, verifyAdmin, async (req, res) => {
+            const issueId = req.params.id
+            const { staffId } = req.body
+            const issue = await issuesCollection.findOne({ _id: new ObjectId(issueId) })
+            if (!issue) return res.status(404).send({ message: 'Issue not found' })
+            if (issue.assignedStaff) {
+                return res.status(400).send({ message: 'Staff already assigned' })
+            }
+            const staff = await usersCollection.findOne({
+                _id: new ObjectId(staffId),
+                role: 'staff'
+            })
+            if (!staff) return res.status(404).send({ message: 'Staff not found' })
+            const assignedStaff = {
+                id: staff._id,
+                name: staff.name,
+                email: staff.email
+            }
+            const result = await issuesCollection.updateOne(
+                { _id: new ObjectId(issueId) },
+                {
+                    $set: { assignedStaff },
+                    $push: {
+                        timeline: {
+                            status: 'pending',
+                            message: `Issue assigned to ${staff.name}`,
+                            updatedBy: { name: 'Admin', role: 'admin' },
+                            timestamp: new Date()
+                        }
+                    }
+                }
+            )
+            res.send(result)
+        });
+
+
+        // server/routes/users.js
+        app.get('/users/staff', verifyFBToken, verifyAdmin, async (req, res) => {
+            const staffs = await usersCollection.find({ role: 'staff' }).toArray();
+            res.send(staffs);
+        });
+
+
+        // Assigned Issues
+        app.get('/assigned-issues', verifyFBToken, verifyStaff, async (req, res) => {
+            const email = req.decoded_email
+            const issues = await issuesCollection
+                .find({ 'assignedStaff.email': email })
+                .sort({ createdAt: -1 })
+                .toArray()
+            res.send(issues)
+        });
+
+
+        // Assigned Issues
+        app.patch('/issues/:id/status', verifyFBToken, verifyStaff, async (req, res) => {
+            const id = req.params.id
+            const { status } = req.body
+            const email = req.decoded_email
+            const issue = await issuesCollection.findOne({ _id: new ObjectId(id) })
+            if (!issue) return res.status(404).send({ message: 'Issue not found' })
+            if (issue.assignedStaff?.email !== email) {
+                return res.status(403).send({ message: 'Forbidden' })
+            }
+            const allowedStatus = ['in-progress', 'working', 'resolved', 'closed']
+            if (!allowedStatus.includes(status)) {
+                return res.status(400).send({ message: 'Invalid status change' })
+            }
+            const staffName = issue.assignedStaff?.name || 'Staff'
+            const result = await issuesCollection.updateOne(
+                { _id: new ObjectId(id) },
+                {
+                    $set: {
+                        status,
+                        updatedAt: new Date()
+                    },
+                    $push: {
+                        timeline: {
+                            status,
+                            message: `Status changed to ${status}`,
+                            updatedBy: {
+                                name: staffName,
+                                email,
+                                role: 'staff'
+                            },
+                            timestamp: new Date()
+                        }
+                    }
+                }
+            )
+            res.send(result)
+        });
+
+
+        // All issue for admin
+        app.get('/admin-all-issues', verifyFBToken, verifyAdmin, async (req, res) => {
+            const issues = await issuesCollection.find({}).toArray()
+            res.send(issues)
+        });
+
+
+        // GET: All users (admin only)
+        app.get('/admin-all-users', verifyFBToken, verifyAdmin, async (req, res) => {
+            const users = await usersCollection.find({}).toArray();
+            res.send(users);
+        });
+
+
+        // show user in admin dashboard
+        app.get('/admin-citizens', verifyFBToken, verifyAdmin, async (req, res) => {
+            const users = await usersCollection.find({ role: 'citizen' }).toArray();
+            res.send(users);
+        });
+
+
+        // block user by admin
+        app.patch('/users-block/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const user = await usersCollection.findOne({ _id: new ObjectId(id) });
+            if (!user) return res.status(404).send({ message: 'User not found' });
+            await usersCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: { isBlocked: !user.isBlocked } }
+            );
+            res.send({ success: true });
+        });
+
+
+        // Manage staff
+        app.get('/users-staff', verifyFBToken, verifyAdmin, async (req, res) => {
+            const staffs = await usersCollection
+                .find({ role: 'staff' })
+                .sort({ createdAt: -1 })
+                .toArray();
+            res.send(staffs);
+        });
+
