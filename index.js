@@ -554,3 +554,223 @@ async function run() {
             }
         });
 
+
+        // Success endpoint
+        app.post('/payment-success', verifyFBToken, async (req, res) => {
+            try {
+                const { stripeSessionId } = req.body;
+                if (!stripeSessionId) {
+                    return res.status(400).send({ success: false, message: "Session ID required" });
+                }
+                const existingPayment = await paymentCollection.findOne({ stripeSessionId });
+                if (existingPayment) {
+                    return res.send({
+                        success: true,
+                        message: "Payment already processed",
+                        paymentRecord: existingPayment
+                    });
+                }
+                const session = await stripe.checkout.sessions.retrieve(stripeSessionId, {
+                    expand: ['payment_intent']
+                });
+                if (session.payment_status !== 'paid') {
+                    return res.status(400).send({ success: false, message: "Payment not completed" });
+                }
+                const amount = session.amount_total / 100;
+                const currency = session.currency;
+                const transactionId = session.payment_intent.id;
+                const customerEmail = session.customer_email;
+                await usersCollection.updateOne(
+                    { email: customerEmail },
+                    { $set: { isPremium: true } }
+                );
+                const paymentRecord = {
+                    userEmail: customerEmail,
+                    type: "Premium Subscription",
+                    amount,
+                    currency,
+                    transactionId,
+                    stripeSessionId,
+                    payment_status: "paid",
+                    paidAt: new Date()
+                };
+                await paymentCollection.insertOne(paymentRecord);
+                res.send({
+                    success: true,
+                    message: "Payment verified & subscription upgraded!",
+                    paymentRecord
+                });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({
+                    success: false,
+                    message: "Payment verification failed",
+                    error: err.message
+                });
+            }
+        });
+
+
+        // Get all payments of logged-in user
+        app.get('/my-payments', verifyFBToken, async (req, res) => {
+            try {
+                const email = req.decoded_email;
+                const payments = await paymentCollection
+                    .find({ userEmail: email })
+                    .sort({ paidAt: -1 })
+                    .toArray();
+                res.send(payments);
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: "Failed to fetch payments", error: err.message });
+            }
+        });
+
+
+        // Boost Payment
+        app.post('/create-boost-session/:issueId', async (req, res) => {
+            try {
+                const { email } = req.body;
+                const { issueId } = req.params;
+                if (!email || !issueId) {
+                    return res.status(400).send({ message: "Email and Issue ID are required" });
+                }
+                const amountUSD = 1;
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ['card'],
+                    mode: 'payment',
+                    customer_email: email,
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: 'usd',
+                                product_data: { name: 'Boost Issue' },
+                                unit_amount: Math.round(amountUSD * 100),
+                            },
+                            quantity: 1,
+                        },
+                    ],
+                    success_url: `${process.env.SITE_DOMAIN}/dashboard/boost-success?issueId=${issueId}&session_id={CHECKOUT_SESSION_ID}`,
+                    cancel_url: `${process.env.SITE_DOMAIN}/dashboard/boost-cancel`,
+                    metadata: {
+                        issueId,
+                        userEmail: email
+                    }
+                });
+                res.send({ url: session.url });
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({
+                    message: "Stripe boost session creation failed",
+                    error: error.message,
+                });
+            }
+        });
+
+
+        // boost-issue by id
+        app.post('/boost-issue/:id', verifyFBToken, verifyNotBlocked, async (req, res) => {
+            const issueId = req.params.id;
+            const email = req.decoded_email;
+            const issue = await issuesCollection.findOne({ _id: new ObjectId(issueId) });
+            if (!issue) return res.status(404).send({ message: 'Issue not found' });
+            if (issue.submittedBy !== email) return res.status(403).send({ message: 'Forbidden' });
+            const session = await stripe.checkout.sessions.create({
+                payment_method_types: ['card'],
+                mode: 'payment',
+                customer_email: email,
+                line_items: [
+                    {
+                        price_data: {
+                            currency: 'usd',
+                            product_data: { name: 'Boost Issue' },
+                            unit_amount: 80,
+                        },
+                        quantity: 1,
+                    }
+                ],
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/boost-success?issueId=${issueId}&session_id={CHECKOUT_SESSION_ID}`,
+                cancel_url: `${process.env.SITE_DOMAIN}/dashboard/boost-cancel`,
+                metadata: { issueId, userEmail: email }
+            });
+            res.send({ url: session.url });
+        });
+
+
+        // Boost success
+        app.post('/boost-success', verifyFBToken, async (req, res) => {
+            try {
+                const { stripeSessionId } = req.body;
+                if (!stripeSessionId) return res.status(400).send({ message: 'Session ID required' });
+                const session = await stripe.checkout.sessions.retrieve(stripeSessionId, {
+                    expand: ['payment_intent']
+                });
+                if (session.payment_status !== 'paid') 
+                    return res.status(400).send({ message: 'Payment not completed' });
+                const issueId = session.metadata.issueId;
+                await issuesCollection.updateOne(
+                    { _id: new ObjectId(issueId) },
+                    { $set: { isBoosted: true } }
+                );
+                const transactionId = session.payment_intent?.id || session.payment_intent;
+                const paymentRecord = {
+                    transactionId,
+                    userEmail: session.metadata.userEmail || null,
+                    type: "Boost Payment",
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    stripeSessionId,
+                    issueId,
+                    payment_status: 'paid',
+                    paidAt: new Date(session.created * 1000)
+                };
+                await paymentCollection.insertOne(paymentRecord);
+                res.send({
+                    success: true,
+                    message: 'Issue boosted successfully',
+                    paymentRecord
+                });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: 'Boost success failed', error: err.message });
+            }
+        });
+
+
+
+        app.get('/admin-all-payments', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { type, status } = req.query;
+                const query = {};
+                if (type) query.type = type;
+                if (status) query.payment_status = status;
+                const payments = await paymentCollection
+                    .find(query)
+                    .sort({ paidAt: -1 })
+                    .toArray();
+
+                res.send(payments);
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: 'Failed to fetch payments' });
+            }
+        });
+
+
+        // await client.db("admin").command({ ping: 1 });
+        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    }
+    finally{
+
+    }
+}
+
+run().catch(console.dir);
+
+app.get('/', (req, res) => {
+    res.send('Server is running!')
+});
+
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+});
