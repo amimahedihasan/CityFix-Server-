@@ -68,3 +68,27 @@ async function run() {
             next();
         };
         
+
+        // Staff Verify Middle-Ware
+        const verifyStaff = async (req, res, next) => {
+            const email = req.decoded_email
+            const user = await usersCollection.findOne({ email })
+            if (!user || user.role !== 'staff') {
+                return res.status(403).send({ message: 'Staff only access' })
+            }
+            next()
+        };
+
+
+        // block
+        const verifyNotBlocked = async (req, res, next) => {
+            const email = req.decoded_email
+            const user = await usersCollection.findOne({ email })
+            if (user?.isBlocked) {
+                return res.status(403).send({ message: 'Your account is blocked' })
+            }
+            next()
+        };
+
+
+        /
