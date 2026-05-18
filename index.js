@@ -91,4 +91,28 @@ async function run() {
         };
 
 
-        
+        // POST: API
+        app.post('/issues', async (req, res) => {
+            const issue = req.body;
+            const { submittedBy } = issue;
+            const user = await usersCollection.findOne({ email: submittedBy });
+            if (!user) {
+                return res.status(404).send({ message: "User not found" });
+            }
+            if (user.isBlocked) {
+                return res.status(403).send({
+                message: 'Your account is blocked. You cannot report issues.'
+                });
+            }
+            if (!user.isPremium) {
+                const userIssuesCount = await issuesCollection.countDocuments({ submittedBy });
+                if (userIssuesCount >= 3) {
+                    return res.status(403).send({
+                        message: "Free users can submit only 3 issues. Please subscribe for unlimited reporting."
+                    });
+                }
+            }
+            const result = await issuesCollection.insertOne(issue);
+            res.send(result);
+        });
+
