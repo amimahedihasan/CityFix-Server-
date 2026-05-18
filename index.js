@@ -433,3 +433,124 @@ async function run() {
             res.send(staffs);
         });
 
+
+        // Staf create
+        app.post('/users-staff', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { name, email, phone, password, photo } = req.body;
+                if (!name || !email || !phone || !password || !photo) {
+                    return res.status(400).send({ message: 'All fields are required' });
+                }
+                let firebaseUser;
+                try {
+                    firebaseUser = await admin.auth().createUser({
+                        email: email.trim(),
+                        password: password,
+                        displayName: name.trim(),
+                        photoURL: photo
+                    });
+                } catch (err) {
+                    if (err.code === 'auth/email-already-exists') {
+                        return res.status(400).send({ message: 'Email already exists' });
+                    }
+                    return res.status(500).send({ message: 'Firebase error', error: err.message });
+                }
+                const staffUser = {
+                    uid: firebaseUser.uid,
+                    name: name.trim(),
+                    email: email.trim(),
+                    phone: phone.trim(),
+                    photo: photo,
+                    role: 'staff',
+                    isBlocked: false,
+                    createdAt: new Date()
+                };
+                const result = await usersCollection.insertOne(staffUser);
+                res.status(201).send({ success: true, insertedId: result.insertedId });
+            } catch (error) {
+                res.status(500).send({ message: 'Internal server error', error: error.message });
+            }
+        });
+
+
+        // PUT: Update a staff
+        app.put('/users-staff/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const staffId = req.params.id;
+                const { name, phone, photo } = req.body;
+                const updateDoc = { name, phone, photo };
+                const result = await usersCollection.updateOne(
+                    { _id: new ObjectId(staffId), role: 'staff' },
+                    { $set: updateDoc }
+                );
+                if (result.matchedCount === 0) {
+                    return res.status(404).send({ message: 'Staff not found' });
+                }
+                res.send({ success: true, message: 'Staff updated successfully' });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: 'Failed to update staff' });
+            }
+        });
+
+
+        // DELETE: Remove a staff
+        app.delete('/users-staff/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const staffId = req.params.id;
+                const result = await usersCollection.deleteOne({
+                    _id: new ObjectId(staffId),
+                    role: 'staff'
+                });
+                if (result.deletedCount === 0) {
+                    return res.status(404).send({ success: false, message: 'Staff not found' });
+                }
+                res.send({ success: true, message: 'Staff deleted successfully' });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ success: false, message: 'Failed to delete staff' });
+            }
+        });
+
+
+        // STRIPE: Payment
+        app.post('/create-checkout-session', async (req, res) => {
+            try {
+                const { email } = req.body;
+                if (!email) {
+                    return res.status(400).send({ message: "Email is required" });
+                }
+                const amount = 7.87;
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ['card'],
+                    mode: 'payment',
+                    customer_email: email,
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: 'usd',
+                                product_data: {
+                                    name: 'CityFix Premium Subscription',
+                                },
+                                unit_amount: Math.round(amount * 100),
+                            },
+                            quantity: 1,
+                        },
+                    ],
+                    success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                    cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
+                    metadata: {
+                        plan: 'premium',
+                        userEmail: email
+                    }
+                });
+                res.send({ url: session.url });
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({
+                    message: "Stripe checkout session creation failed",
+                    error: error.message,
+                });
+            }
+        });
+
