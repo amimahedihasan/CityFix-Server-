@@ -47,3 +47,24 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+
+async function run() {
+    try{
+        // await client.connect();
+
+        const db = client.db('city_fix_db');
+        const issuesCollection = db.collection('issues');
+        const usersCollection = db.collection('users');
+        const paymentCollection = db.collection('payments');
+
+
+        // Admin Verify Middle-Ware
+        const verifyAdmin = async (req, res, next) => {
+        const email = req.decoded_email;
+        const user = await usersCollection.findOne({ email });
+        if (!user || user.role !== 'admin') {
+            return res.status(403).send({ message: 'Admin only access' });
+        }
+            next();
+        };
+        
